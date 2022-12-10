@@ -13,3 +13,11 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+credentials.json
+token.json
+pub-sub-client-key-*.json
+env.sh
+*.m4v
+*.ogg
+*.h264
+*.ivf
