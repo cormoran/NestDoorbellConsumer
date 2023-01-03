@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -142,6 +144,16 @@ type NestDoorbellEventProcessor struct {
 	doorbellDeviceName  string
 	client              *http.Client
 	deviceAccessService *smartdevicemanagement.Service
+	outputDir           string
+}
+
+func (p *NestDoorbellEventProcessor) Init() error {
+	if _, err := os.Stat(p.outputDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(p.outputDir, 0777); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *NestDoorbellEventProcessor) Process(event *DeviceEvent) error {
@@ -248,11 +260,6 @@ func (p *NestDoorbellEventProcessor) downloadAndSaveCameraClipPreview(clipPrevie
 		return err
 	}
 	defer resp.Body.Close()
-	fmt.Printf("status:", resp.Status)
-	fmt.Printf("Headers:\n")
-	for key := range resp.Header {
-		fmt.Printf("\t* %v: %v\n", key, resp.Header.Get(key))
-	}
 	extensions, err := mime.ExtensionsByType(resp.Header.Get("Content-Type"))
 	if err != nil || len(extensions) == 0 {
 		fmt.Printf("Failed to get extension type from content type(%v): err(%v)", resp.Header.Get("Content-Type"), err)
@@ -261,7 +268,7 @@ func (p *NestDoorbellEventProcessor) downloadAndSaveCameraClipPreview(clipPrevie
 	i := 0
 	fileName := ""
 	for {
-		fileName = clipPreview.EventSessionId + "_" + strconv.Itoa(i) + extensions[0]
+		fileName = filepath.Join(p.outputDir, clipPreview.EventSessionId+"_"+strconv.Itoa(i)+extensions[0])
 		_, err := os.Stat(fileName)
 		if os.IsNotExist(err) {
 			break
@@ -283,11 +290,10 @@ func (p *NestDoorbellEventProcessor) downloadAndSaveCameraClipPreview(clipPrevie
 }
 
 // Retrieve a token, saves the token, then returns the generated client.
-func getClient(config *oauth2.Config) *http.Client {
+func getClient(config *oauth2.Config, tokFile string) *http.Client {
 	// The file token.json stores the user's access and refresh tokens, and is
 	// created automatically when the authorization flow completes for the first
 	// time.
-	tokFile := "token.json"
 	tok, err := tokenFromFile(tokFile)
 	if err != nil {
 		tok = getTokenFromWeb(config)
@@ -338,10 +344,20 @@ func saveToken(path string, token *oauth2.Token) {
 }
 
 func main() {
-	projectId := os.Getenv("NEST_PROJECT_ID")
+	var (
+		projectId            = flag.String("nest-project-id", os.Getenv("NEST_PROJECT_ID"), "Device access console project id taken from https://console.nest.google.com/device-access e.g. enterprises/<project_id>")
+		smartDeviceCredPath  = flag.String("smart-device-cred-path", "credentials.json", "path to google cloud oauth credential json file for smart device API")
+		pubsubProject        = flag.String("pubsub-project-id", os.Getenv("PUBSUB_PROJECT_ID"), "google could project id for pubsub")
+		pubsubCredPath       = flag.String("pubsub-cred-path", os.Getenv("PUBSUB_CRED_PATH"), "path to google cloud credential json file for pubsub")
+		pubsubSubscriptionId = flag.String("pubsub-subscription-id", "test-subscription", "pubsub subscription id")
+		outputDir            = flag.String("output-dir", "output", "output directory")
+		//
+		tokenPath = flag.String("token-path", "token.json", "file path to save access token/update token taken from smart device API oauth")
+	)
+	flag.Parse()
 
 	ctx := context.Background()
-	b, err := os.ReadFile("credentials.json")
+	b, err := os.ReadFile(*smartDeviceCredPath)
 	if err != nil {
 		log.Fatalf("Unable to read client secret file: %v", err)
 	}
@@ -349,15 +365,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}
-	client := getClient(config)
+	client := getClient(config, *tokenPath)
 
 	svc, err := smartdevicemanagement.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("BasePath: %v\n", svc.BasePath)
-	fmt.Printf("UserAgent: %v\n", svc.UserAgent)
-	r, err := svc.Enterprises.Devices.List(projectId).Do()
+	r, err := svc.Enterprises.Devices.List(*projectId).Do()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -370,34 +384,25 @@ func main() {
 		}
 	}
 	if doorbellDeviceName == nil {
-		log.Fatal("(!) Doorbell device not found in the account")
+		log.Fatalln("Doorbell device not found in the account")
+	} else {
+		log.Println("Found", doorbellDeviceName)
 	}
-	// structures, err := svc.Enterprises.Structures.List(projectId).Do()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// for _, i := range structures.Structures {
-	// 	fmt.Printf("%v\n", i.Name)
-	// 	rooms, err := svc.Enterprises.Structures.Rooms.List(i.Name).Do()
-	// 	if err != nil {
-	// 		log.Fatal(err)
-	// 	}
-	// 	for _, j := range rooms.Rooms {
-	// 		fmt.Printf("%v\n", j.Name)
-	// 	}
-	// }
 
-	pubsubProject := os.Getenv("PUBSUB_PROJECT_ID")
-	pubsubCredPath := os.Getenv("PUBSUB_CRED_PATH")
-	pubsubClient, err := pubsub.NewClient(context.Background(), pubsubProject, option.WithCredentialsFile(pubsubCredPath))
+	pubsubClient, err := pubsub.NewClient(context.Background(), *pubsubProject, option.WithCredentialsFile(*pubsubCredPath))
 	if err != nil {
 		log.Fatal(err)
 	}
-	sub := pubsubClient.Subscription("test-subscription")
+	sub := pubsubClient.Subscription(*pubsubSubscriptionId)
 	processor := NestDoorbellEventProcessor{
 		doorbellDeviceName:  *doorbellDeviceName,
 		client:              client,
 		deviceAccessService: svc,
+		outputDir:           *outputDir,
+	}
+	err = processor.Init()
+	if err != nil {
+		log.Fatal(err)
 	}
 	err = sub.Receive(context.Background(), func(ctx context.Context, m *pubsub.Message) {
 		defer m.Ack()
@@ -414,5 +419,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	time.Sleep(60 * 60 * time.Second)
+	for {
+		time.Sleep(time.Second)
+	}
 }
