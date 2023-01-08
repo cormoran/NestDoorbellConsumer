@@ -358,7 +358,7 @@ func main() {
 		pubsubCredPath       = flag.String("pubsub-cred-path", os.Getenv("PUBSUB_CRED_PATH"), "path to google cloud credential json file for pubsub")
 		pubsubSubscriptionId = flag.String("pubsub-subscription-id", "test-subscription", "pubsub subscription id")
 		outputDir            = flag.String("output-dir", "output", "output directory")
-		outputFileNameFormat = flag.String("output-file-path-format", "2006/01/02/15/04/{eventSessionId}", "output file path format. Supports creating sub directory. go's time layout and {eventSessionId} is supported as variable.")
+		outputFileNameFormat = flag.String("output-file-path-format", "2006/01/02/15/{eventSessionId}", "output file path format. Supports creating sub directory. go's time layout and {eventSessionId} is supported as variable.")
 		//
 		tokenPath = flag.String("token-path", "token.json", "file path to save access token/update token taken from smart device API oauth")
 	)
