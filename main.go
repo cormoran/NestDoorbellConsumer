@@ -14,9 +14,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/pubsub"
+	"github.com/golang/groupcache/lru"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
@@ -141,11 +143,13 @@ type StopWebRtcStreamRequestParam struct {
 }
 
 type NestDoorbellEventProcessor struct {
-	doorbellDeviceName   string
-	client               *http.Client
-	deviceAccessService  *smartdevicemanagement.Service
-	outputDir            string
-	outputFileNameFormat string
+	doorbellDeviceName        string
+	client                    *http.Client
+	deviceAccessService       *smartdevicemanagement.Service
+	outputDir                 string
+	outputFileNameFormat      string
+	wasClipPreviewProcessed   *lru.Cache
+	wasClipPreviewProcessedMu sync.Mutex
 }
 
 func (p *NestDoorbellEventProcessor) Init() error {
@@ -154,6 +158,7 @@ func (p *NestDoorbellEventProcessor) Init() error {
 			return err
 		}
 	}
+	p.wasClipPreviewProcessed = lru.New(100)
 	return nil
 }
 
@@ -256,6 +261,19 @@ func (p *NestDoorbellEventProcessor) processRelationUpdateEvent(event *DeviceEve
 }
 
 func (p *NestDoorbellEventProcessor) downloadAndSaveCameraClipPreview(clipPreview *ResourceUpdateEventCameraClipPreview) error {
+	f := func() bool {
+		p.wasClipPreviewProcessedMu.Lock()
+		defer p.wasClipPreviewProcessedMu.Unlock()
+		if _, ok := p.wasClipPreviewProcessed.Get(clipPreview.PreviewUrl); ok {
+			// skip
+			return true
+		}
+		p.wasClipPreviewProcessed.Add(clipPreview.PreviewUrl, true)
+		return false
+	}
+	if f() {
+		return nil
+	}
 	resp, err := p.client.Get(clipPreview.PreviewUrl)
 	if err != nil {
 		return err
