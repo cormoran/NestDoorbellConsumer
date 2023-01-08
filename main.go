@@ -141,10 +141,11 @@ type StopWebRtcStreamRequestParam struct {
 }
 
 type NestDoorbellEventProcessor struct {
-	doorbellDeviceName  string
-	client              *http.Client
-	deviceAccessService *smartdevicemanagement.Service
-	outputDir           string
+	doorbellDeviceName   string
+	client               *http.Client
+	deviceAccessService  *smartdevicemanagement.Service
+	outputDir            string
+	outputFileNameFormat string
 }
 
 func (p *NestDoorbellEventProcessor) Init() error {
@@ -266,15 +267,21 @@ func (p *NestDoorbellEventProcessor) downloadAndSaveCameraClipPreview(clipPrevie
 		extensions = []string{".video.unknown"}
 	}
 	i := 0
+	fileNameFormat := time.Now().Format(p.outputFileNameFormat)
 	fileName := ""
 	for {
-		fileName = filepath.Join(p.outputDir, clipPreview.EventSessionId+"_"+strconv.Itoa(i)+extensions[0])
-		_, err := os.Stat(fileName)
-		if os.IsNotExist(err) {
+		fileName = filepath.Join(p.outputDir, strings.ReplaceAll(fileNameFormat, "{eventSessionId}", clipPreview.EventSessionId+"_"+strconv.Itoa(i))+extensions[0])
+		if _, err := os.Stat(fileName); os.IsNotExist(err) {
 			break
 		}
 		i = i + 1
 		fmt.Printf("%v - %v\n", i, fileName)
+	}
+	outputDir := filepath.Dir(fileName)
+	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(outputDir, 0777); err != nil {
+			return err
+		}
 	}
 	file, err := os.Create(fileName)
 	if err != nil {
@@ -351,6 +358,7 @@ func main() {
 		pubsubCredPath       = flag.String("pubsub-cred-path", os.Getenv("PUBSUB_CRED_PATH"), "path to google cloud credential json file for pubsub")
 		pubsubSubscriptionId = flag.String("pubsub-subscription-id", "test-subscription", "pubsub subscription id")
 		outputDir            = flag.String("output-dir", "output", "output directory")
+		outputFileNameFormat = flag.String("output-file-path-format", "2006/01/02/15/04/{eventSessionId}", "output file path format. Supports creating sub directory. go's time layout and {eventSessionId} is supported as variable.")
 		//
 		tokenPath = flag.String("token-path", "token.json", "file path to save access token/update token taken from smart device API oauth")
 	)
@@ -395,10 +403,11 @@ func main() {
 	}
 	sub := pubsubClient.Subscription(*pubsubSubscriptionId)
 	processor := NestDoorbellEventProcessor{
-		doorbellDeviceName:  *doorbellDeviceName,
-		client:              client,
-		deviceAccessService: svc,
-		outputDir:           *outputDir,
+		doorbellDeviceName:   *doorbellDeviceName,
+		client:               client,
+		deviceAccessService:  svc,
+		outputDir:            *outputDir,
+		outputFileNameFormat: *outputFileNameFormat,
 	}
 	err = processor.Init()
 	if err != nil {
